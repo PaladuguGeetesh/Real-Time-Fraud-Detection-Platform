@@ -1,0 +1,27 @@
+# Data
+data/
+*.csv
+
+*.pkl
+*.joblib
+!ml-service/model.pkl
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Env / secrets
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+.vscode/
+
+.claude/

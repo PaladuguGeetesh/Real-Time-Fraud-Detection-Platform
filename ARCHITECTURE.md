@@ -83,7 +83,11 @@ Kaggle Credit Card Fraud Detection dataset. Columns:
 1. **Training** the ML model (offline, one-time, done in the ML service build step).
 2. **Source of the "live" stream** replayed by the Generator.
 
-**Important modeling note:** we use **Isolation Forest**, which is *unsupervised* — it does **not** train on the `Class` label. We hold `Class` aside purely to **evaluate** the model (precision/recall) and to tune the score threshold. At prediction time, `Class` is never sent to the ML service — that would be cheating and unrealistic (in production you don't know the label yet).
+**Important modeling note (revised):** the original plan was an unsupervised **Isolation Forest** that never trains on `Class`, evaluating against it only afterward. We built and tuned that model (`iforest-v2`: engineered features, grid-searched hyperparameters, F1-optimal and cost-weighted thresholds — see `ml-service/train.py`), then benchmarked it against a supervised **XGBoost** classifier trained directly on `Class` (with `scale_pos_weight` for the ~577:1 class imbalance, no SMOTE/resampling) on the identical train/test split (`ml-service/evaluate_baseline.py`).
+
+The result: Isolation Forest's recall plateaued around **68%** no matter how the threshold was weighted (AUPRC 0.28), while XGBoost reached **~96% precision / ~83% recall** (AUPRC 0.88) on the same held-out data. This dataset comes with genuine historical labels — we're not simulating a cold-start, label-free production system, we have `Class` for every training row — so training on it is the realistic choice, not "cheating." Real payment companies build supervised fraud models on exactly this kind of historical labeled data.
+
+**Decision: XGBoost ships as the production model** (`modelVersion: "xgboost-v1"`). `Class` is still never sent to the ML service at *inference* time (`/predict` only receives `Time`, `V1`–`V28`, `Amount`) — the label is used offline, during training, same as any supervised model. Isolation Forest is retained in `train.py` as `train_isolation_forest_legacy()` — kept as the evaluation baseline that justified this decision, and as a documented starting point for potential future work on a hybrid novelty-detection layer (an unsupervised model can flag patterns with no labeled precedent, which a purely supervised classifier structurally cannot).
 
 ---
 
@@ -136,8 +140,8 @@ Notes:
 ```json
 {
   "prediction": "fraud",        // "fraud" | "safe"
-  "riskScore": 0.87,            // normalized 0.0–1.0, higher = riskier
-  "modelVersion": "iforest-v1"
+  "riskScore": 0.87,            // XGBoost's predicted fraud probability, 0.0–1.0, higher = riskier
+  "modelVersion": "xgboost-v1"
 }
 ```
 
@@ -215,8 +219,8 @@ Socket.io event `newTransaction`, payload = the Stored Transaction object (5.4, 
 
 These are deliberately not locked yet. We'll decide each when we reach the relevant service.
 
-1. **Isolation Forest `contamination`** parameter and the **risk-score threshold** for flagging fraud — tune against `Class` during training.
-2. **Risk score normalization** — Isolation Forest gives an anomaly score; decide how to map it to a clean 0.0–1.0.
+1. ~~Isolation Forest `contamination` parameter~~ **RESOLVED — model choice, not just a hyperparameter:** production ships **XGBoost** (supervised), not Isolation Forest. Trained on `Class` with `scale_pos_weight` set to the actual imbalance ratio (227,451 negative / 394 positive ≈ 577:1 in the training split), no SMOTE/resampling. Flagging threshold: F1-optimal cutoff on the held-out test set (~0.965), stored as `risk_threshold` in `model.pkl` and applied in `app.py`. Rationale: Isolation Forest's recall plateaued ~68% (AUPRC 0.28) regardless of threshold weighting; XGBoost reached ~83% recall at 96% precision (AUPRC 0.88) on the identical split — see `ml-service/evaluate_baseline.py`. The Isolation Forest grid-search/threshold-tuning approach is preserved in `train.py`'s `train_isolation_forest_legacy()` but no longer governs production.
+2. ~~Risk score normalization~~ **RESOLVED:** moot for the shipped model — XGBoost's `predict_proba` already returns a calibrated 0.0–1.0 fraud probability, used directly as `riskScore`. (The min/max normalization scheme was specific to Isolation Forest's raw anomaly score and still exists in `train.py`'s legacy path for that model.)
 3. **Kafka topology** — single topic `transactions`, single partition to start; revisit partitions/consumer groups if we simulate scale.
 4. **MongoDB shape** — single `transactions` collection (chosen for now); whether to store full `features` for retraining.
 5. **Redis daily reset** — how `fraudToday` resets (TTL vs. date-keyed counters).
@@ -301,7 +305,7 @@ Build bottom-up so each layer can be tested before the next depends on it.
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 0 — Scaffold | ⬜ Not started | |
-| 1 — ML Service | ⬜ Not started | |
+| 1 — ML Service | ✅ Complete | Ships **XGBoost** (`xgboost-v1`), supervised, `scale_pos_weight` for imbalance, no resampling. ~83% recall / ~96% precision, AUPRC 0.88 on held-out test. Isolation Forest built, tuned, and benchmarked first (`iforest-v2`, AUPRC 0.28, recall plateaued ~68%) — retained as `train_isolation_forest_legacy()` for reference / future hybrid novelty-detection work. See §4 and §8 for rationale. |
 | 2 — Generator | ⬜ Not started | |
 | 3 — Backend | ⬜ Not started | |
 | 4 — Dashboard | ⬜ Not started | |
