@@ -81,7 +81,8 @@ def predict(request: PredictRequest) -> PredictResponse:
 
     risk_score = float(model.predict_proba(row)[0, 1])
 
-    prediction = "fraud" if risk_score >= risk_threshold else "safe"
+
+    prediction = "fraud" if risk_score >= risk_threshold else "safe" # risk threshold comes from model.pkl(bundle)
 
     return PredictResponse(
         prediction=prediction,
