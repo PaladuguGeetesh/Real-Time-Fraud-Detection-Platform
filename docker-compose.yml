@@ -1,0 +1,34 @@
+services:
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode: single node acts as both broker and controller, no Zookeeper.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
+
+      # PLAINTEXT: internal, for other containers on this compose network (e.g.
+      #   the Generator/Backend services added in later Phase 2/3 steps) to reach
+      #   Kafka at kafka:19092.
+      # CONTROLLER: KRaft consensus traffic, required even for a single node.
+      # PLAINTEXT_HOST: bound to all interfaces inside the container so the
+      #   9092:9092 port mapping below can forward host traffic to it.
+      KAFKA_LISTENERS: PLAINTEXT://kafka:19092,CONTROLLER://kafka:19093,PLAINTEXT_HOST://0.0.0.0:9092
+      # Advertised addresses are what Kafka tells clients to (re)connect to.
+      # A host-side Python script connects to PLAINTEXT_HOST at localhost:9092,
+      # which resolves correctly through the port mapping above.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+
+      # Single-broker cluster: replication factor must be 1, not the default 3.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # The `transactions` topic gets created automatically on first publish.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
