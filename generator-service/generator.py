@@ -29,7 +29,7 @@ from build_event import DATA_PATH, build_event
 BOOTSTRAP_SERVERS = "localhost:9092"
 TOPIC = "transactions"
 PUBLISH_INTERVAL_SECONDS = float(os.environ.get("PUBLISH_INTERVAL_SECONDS", "1.0"))
-FRAUD_INJECTION_EVERY_N = 0
+FRAUD_INJECTION_EVERY_N = float(os.environ.get("FRAUD_INJECTION_EVERY_N","15"))
 
 
 def main():
@@ -66,8 +66,13 @@ def main():
 
                 event = build_event(row)
 
-                future = producer.send(TOPIC, event)
-                future.get(timeout=10)  # confirm delivery before logging/moving on
+                try:
+                    future = producer.send(TOPIC, event)
+                    future.get(timeout=10)  # confirm delivery before logging/moving on
+                except Exception as err:
+                    print(f"[warning] Failed to publish {event['transactionId']}: {err}")
+                    time.sleep(PUBLISH_INTERVAL_SECONDS)
+                    continue  # skip this row, move on rather than crashing the script
 
                 marker = " [INJECTED FRAUD]" if is_injected else ""
                 print(

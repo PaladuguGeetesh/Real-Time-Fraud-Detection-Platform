@@ -1,0 +1,29 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Transaction {
+  transactionId     String   @id
+  bankId            String
+  timestamp         DateTime
+  amount            Float
+  merchant          String
+  country           String
+  cardType          String
+  device            String
+  prediction        String
+  riskScore         Float
+  modelVersion      String
+  groundTruth       Int
+  predictionCorrect Boolean
+  features          Json
+
+  @@index([prediction])
+  @@index([country])
+  @@index([timestamp])
+}

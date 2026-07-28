@@ -32,3 +32,28 @@ services:
 
       # The `transactions` topic gets created automatically on first publish.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  mysql:
+    image: mysql:8
+    container_name: mysql
+    ports:
+      - "3306:3306"
+    environment:
+      # Local dev only -- fine to hardcode simple values here.
+      MYSQL_ROOT_PASSWORD: devpassword
+      MYSQL_DATABASE: frauddb
+    volumes:
+      # Named volume: survives container restarts/recreates, only wiped
+      # by an explicit `docker compose down -v`.
+      - mysql_data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    # No volume -- Redis here is a hot-aggregate cache, not the system
+    # of record (that's MySQL), so it doesn't need to survive a restart.
+
+volumes:
+  mysql_data:
