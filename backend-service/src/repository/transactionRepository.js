@@ -28,12 +28,14 @@ async function findById(transactionId) {
  * @param {number} params.page - 1-indexed.
  * @param {number} params.limit - page size.
  * @param {string} [params.prediction] - filter, omitted entirely if not provided.
- * @param {string} [params.country] - filter, omitted entirely if not provided.
+ * @param {string[]} [params.country] - multi-select filter (OR match via
+ *   `in`), omitted entirely if not provided or empty. A one-element array
+ *   behaves identically to a plain equality filter.
  */
 async function findPaginated({ page, limit, prediction, country }) {
   const where = {};
   if (prediction) where.prediction = prediction;
-  if (country) where.country = country;
+  if (country && country.length > 0) where.country = { in: country };
 
   const skip = (page - 1) * limit;
 
