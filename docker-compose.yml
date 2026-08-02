@@ -1,7 +1,26 @@
 services:
+  # One-shot init: a brand-new named volume's mountpoint is created
+  # root:root by Docker, but apache/kafka:4.3.1 runs as non-root
+  # appuser (uid 1000) with no entrypoint step to fix that itself
+  # (unlike mysql:8's official entrypoint, which chowns its own data
+  # dir before dropping privileges -- why mysql_data needed no such
+  # step). Without this, Kafka's first-ever KRaft metadata write fails
+  # with AccessDeniedException on /tmp/kafka-logs/bootstrap.checkpoint.tmp.
+  # Runs once, exits, and kafka waits for that success below -- kafka
+  # itself keeps running as its intended non-root user.
+  kafka-init:
+    image: busybox
+    container_name: kafka-init
+    volumes:
+      - kafka_data:/tmp/kafka-logs
+    command: chown -R 1000:1000 /tmp/kafka-logs
+
   kafka:
     image: apache/kafka:4.3.1
     container_name: kafka
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
     ports:
       - "9092:9092"
     environment:
@@ -32,6 +51,34 @@ services:
 
       # The `transactions` topic gets created automatically on first publish.
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      # Named volume: survives container restarts/recreates, only wiped
+      # by an explicit `docker compose down -v` -- same pattern as
+      # mysql_data below. /tmp/kafka-logs is Kafka's actual KRaft log
+      # directory (topic partition data, __consumer_offsets, and the
+      # __cluster_metadata/meta.properties KRaft formatting record) --
+      # confirmed by inspecting a running container's filesystem, not
+      # assumed: no KAFKA_LOG_DIRS is set above and the effective
+      # /opt/kafka/config/server.properties has no log.dirs override
+      # either, so Kafka falls back to this built-in default. (A
+      # same-named path appears in the image's unused docker-config
+      # *template* file as "/tmp/kraft-combined-logs" -- that's not
+      # what's actually running, which is exactly why this was
+      # confirmed against the live container rather than assumed from
+      # that file.) Before this volume, every `docker compose down`
+      # wiped this directory, forcing a fresh KRaft format and empty
+      # topics on next start -- the root cause of the Phase 6 Step 5
+      # cold-start topic-race bug.
+      - kafka_data:/tmp/kafka-logs
+    healthcheck:
+      # kafka-broker-api-versions.sh isn't on PATH (lives in
+      # /opt/kafka/bin) -- a real broker-protocol round trip against
+      # the PLAINTEXT_HOST listener, not just "is the process up."
+      test: ["CMD", "/opt/kafka/bin/kafka-broker-api-versions.sh", "--bootstrap-server", "localhost:9092"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
 
   mysql:
     image: mysql:8
@@ -46,6 +93,12 @@ services:
       # Named volume: survives container restarts/recreates, only wiped
       # by an explicit `docker compose down -v`.
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pdevpassword"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   redis:
     image: redis:7-alpine
@@ -54,6 +107,97 @@ services:
       - "6379:6379"
     # No volume -- Redis here is a hot-aggregate cache, not the system
     # of record (that's MySQL), so it doesn't need to survive a restart.
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  ml-service:
+    build: ./ml-service
+    container_name: ml-service
+    ports:
+      - "8000:8000"
+    # No depends_on -- this service has no dependencies on anything
+    # else in this compose file (model.pkl is baked into its image).
+    healthcheck:
+      # python:3.12-slim has no curl (confirmed -- adding it just for
+      # a healthcheck wasn't worth the extra image layer), so this
+      # uses the interpreter that's already there instead. A failed
+      # urlopen raises, which is a non-zero exit -- exactly what
+      # HEALTHCHECK needs.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  backend-service:
+    build: ./backend-service
+    container_name: backend-service
+    ports:
+      - "4000:4000"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    environment:
+      # Container hostnames, not localhost -- see the matching
+      # comments in src/config.js. The condition: service_healthy
+      # blocks above wait for each dependency to genuinely be ready
+      # (not just "container started" -- see each service's own
+      # healthcheck), so backend-service's first connection attempt
+      # to Kafka/MySQL/Redis/ML no longer races their startup. The
+      # app's own retry logic (already required for host dev, since
+      # infra there might also not be up yet) remains as a second
+      # line of defense for anything that becomes unavailable later.
+      DATABASE_URL: mysql://root:devpassword@mysql:3306/frauddb
+      KAFKA_BROKER: kafka:19092
+      REDIS_HOST: redis
+      ML_SERVICE_URL: http://ml-service:8000
+
+  generator-service:
+    build: ./generator-service
+    container_name: generator-service
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER: kafka:19092
+    volumes:
+      # creditcard.csv (150MB, gitignored) lives one level above
+      # generator-service/ on the host; mounting it at /data here
+      # (Dockerfile's WORKDIR is /app) preserves generator.py's
+      # existing relative DATA_PATH ("../data/creditcard.csv")
+      # completely unchanged -- /app/../data resolves to /data inside
+      # the container the same way generator-service/../data resolves
+      # on the host. Not baked into the image: 150MB of demo data
+      # doesn't belong in a build layer, and a bind mount means
+      # dropping in a fresh CSV never requires a rebuild.
+      - ./data:/data:ro
+
+  dashboard-service:
+    build: ./dashboard-service
+    container_name: dashboard-service
+    ports:
+      # Host side kept at 5173 for familiarity; container side is 80,
+      # nginx's default -- nothing in this container runs Vite's dev
+      # server anymore (see the Dockerfile's multi-stage build).
+      - "5173:80"
+    depends_on:
+      - backend-service
+    # No environment overrides: the dashboard's API/EventSource calls
+    # (src/api/client.js, src/api/streamClient.js) run in the user's
+    # browser, not inside this container, so they correctly stay
+    # pointed at http://localhost:4000 -- a container hostname like
+    # "backend-service" wouldn't resolve from the browser at all.
 
 volumes:
   mysql_data:
+  kafka_data:

@@ -8,7 +8,11 @@ const PORT = process.env.PORT || 4000;
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
 
-const KAFKA_BOOTSTRAP_SERVERS = ["localhost:9092"];
+// Defaults to the host-facing listener for local (non-Docker) dev;
+// docker-compose overrides this to "kafka:19092" -- the internal
+// listener, reachable only from other containers on the compose
+// network -- so the same code runs unmodified in both environments.
+const KAFKA_BOOTSTRAP_SERVERS = [process.env.KAFKA_BROKER || "localhost:9092"];
 const KAFKA_TOPIC = "transactions";
 const KAFKA_GROUP_ID = "backend-service-group";
 
@@ -25,7 +29,10 @@ const KAFKA_SCORED_TOPIC = "scored-transactions";
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 30000;
 
-const REDIS_HOST = "localhost";
+// Same pattern as KAFKA_BOOTSTRAP_SERVERS above: docker-compose
+// overrides this to "redis" (the container's service name on the
+// compose network); local host dev keeps the localhost default.
+const REDIS_HOST = process.env.REDIS_HOST || "localhost";
 const REDIS_PORT = 6379;
 const TOP_RISK_LIMIT = 20;
 

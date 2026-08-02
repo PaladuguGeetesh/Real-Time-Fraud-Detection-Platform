@@ -24,7 +24,7 @@
 
 const { Kafka } = require("kafkajs");
 const { predictFraud } = require("../services/mlClient");
-const { retryWithBackoff } = require("./retryWithBackoff");
+const { retryWithBackoff, retryStartup } = require("./retryWithBackoff");
 const {
   KAFKA_BOOTSTRAP_SERVERS,
   KAFKA_TOPIC,
@@ -136,8 +136,24 @@ async function handleMessage({ topic, partition, message, heartbeat }) {
 
 async function startScoringConsumer() {
   await producer.connect();
-  await consumer.connect();
-  await consumer.subscribe({ topic: KAFKA_TOPIC, fromBeginning: FROM_BEGINNING });
+
+  // See retryWithBackoff.js's retryStartup() docstring: a fresh
+  // broker can transiently reject this subscribe with
+  // UNKNOWN_TOPIC_OR_PARTITION while auto-creating "transactions".
+  await retryStartup(
+    async () => {
+      await consumer.connect();
+      await consumer.subscribe({ topic: KAFKA_TOPIC, fromBeginning: FROM_BEGINNING });
+    },
+    {
+      baseDelayMs: RETRY_BASE_DELAY_MS,
+      maxDelayMs: RETRY_MAX_DELAY_MS,
+      onRetry: (attempt, err, delayMs) => {
+        console.log(`[scoring] connect/subscribe attempt ${attempt} failed: ${err.message}`);
+        console.log(`[scoring] retrying in ${delayMs}ms...`);
+      },
+    }
+  );
 
   await consumer.run({
     autoCommit: false,

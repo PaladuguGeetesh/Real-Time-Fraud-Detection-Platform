@@ -24,7 +24,7 @@
 
 const { Kafka } = require("kafkajs");
 const { save } = require("../repository/auditLogRepository");
-const { retryWithBackoff } = require("./retryWithBackoff");
+const { retryWithBackoff, retryStartup } = require("./retryWithBackoff");
 const { KAFKA_BOOTSTRAP_SERVERS, KAFKA_SCORED_TOPIC, RETRY_BASE_DELAY_MS, RETRY_MAX_DELAY_MS } = require("../config");
 
 const GROUP_ID = "audit-log-group";
@@ -103,8 +103,23 @@ async function handleMessage({ topic, partition, message, heartbeat }) {
 }
 
 async function startAuditLogConsumer() {
-  await consumer.connect();
-  await consumer.subscribe({ topic: KAFKA_SCORED_TOPIC, fromBeginning: FROM_BEGINNING });
+  // See retryWithBackoff.js's retryStartup() docstring: a fresh
+  // broker can transiently reject this subscribe with
+  // UNKNOWN_TOPIC_OR_PARTITION while auto-creating "scored-transactions".
+  await retryStartup(
+    async () => {
+      await consumer.connect();
+      await consumer.subscribe({ topic: KAFKA_SCORED_TOPIC, fromBeginning: FROM_BEGINNING });
+    },
+    {
+      baseDelayMs: RETRY_BASE_DELAY_MS,
+      maxDelayMs: RETRY_MAX_DELAY_MS,
+      onRetry: (attempt, err, delayMs) => {
+        console.log(`[audit-log] connect/subscribe attempt ${attempt} failed: ${err.message}`);
+        console.log(`[audit-log] retrying in ${delayMs}ms...`);
+      },
+    }
+  );
 
   await consumer.run({
     autoCommit: false,

@@ -80,4 +80,38 @@ async function retryWithBackoff(operation, { heartbeat, baseDelayMs, maxDelayMs,
   }
 }
 
-module.exports = { retryWithBackoff };
+/**
+ * Retries `operation` FOREVER on failure, same exponential-backoff
+ * policy as retryWithBackoff, for use BEFORE a consumer group session
+ * exists yet -- e.g. the initial connect()+subscribe() at startup.
+ * There's no active session to keep alive at that point, so unlike
+ * retryWithBackoff there's no heartbeat callback to thread through;
+ * a plain sleep() is enough.
+ *
+ * Exists because of a real gap found running a genuine cold start
+ * (Phase 6, Step 5): consumer.subscribe() can transiently fail with
+ * UNKNOWN_TOPIC_OR_PARTITION (kafkajs marks it retriable: true) right
+ * after a fresh Kafka broker auto-creates a topic on first reference
+ * -- creation is asynchronous, so the very next metadata check can
+ * still race it. Every startXConsumer() function used to call
+ * connect()/subscribe() once and let a rejection propagate straight
+ * to server.js's fire-and-forget .catch(), which only logs -- nothing
+ * ever retried, so a consumer that lost this race never started for
+ * the lifetime of the container.
+ */
+async function retryStartup(operation, { baseDelayMs, maxDelayMs, onRetry }) {
+  let attempt = 1;
+  // eslint-disable-next-line no-constant-condition -- deliberately unbounded: no give-up point.
+  while (true) {
+    try {
+      return await operation();
+    } catch (err) {
+      const delayMs = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs);
+      if (onRetry) onRetry(attempt, err, delayMs);
+      await sleep(delayMs);
+      attempt++;
+    }
+  }
+}
+
+module.exports = { retryWithBackoff, retryStartup };

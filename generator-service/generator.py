@@ -26,7 +26,12 @@ from kafka import KafkaProducer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from build_event import DATA_PATH, build_event
 
-BOOTSTRAP_SERVERS = "localhost:9092"
+# Defaults to the host-facing listener for local (non-Docker) dev;
+# docker-compose overrides this to "kafka:19092" -- the internal
+# listener, reachable only from other containers on the compose
+# network -- so the same code runs unmodified in both environments
+# (same pattern as backend-service/src/config.js's KAFKA_BROKER).
+BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BROKER", "localhost:9092")
 TOPIC = "transactions"
 PUBLISH_INTERVAL_SECONDS = float(os.environ.get("PUBLISH_INTERVAL_SECONDS", "1.0"))
 FRAUD_INJECTION_EVERY_N = float(os.environ.get("FRAUD_INJECTION_EVERY_N","15"))

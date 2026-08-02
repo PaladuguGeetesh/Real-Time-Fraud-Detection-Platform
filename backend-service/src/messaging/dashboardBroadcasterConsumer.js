@@ -29,7 +29,8 @@
 
 const { Kafka } = require("kafkajs");
 const { broadcast } = require("../services/sseClients");
-const { KAFKA_BOOTSTRAP_SERVERS, KAFKA_SCORED_TOPIC } = require("../config");
+const { retryStartup } = require("./retryWithBackoff");
+const { KAFKA_BOOTSTRAP_SERVERS, KAFKA_SCORED_TOPIC, RETRY_BASE_DELAY_MS, RETRY_MAX_DELAY_MS } = require("../config");
 
 const GROUP_ID = "dashboard-broadcaster-group";
 
@@ -97,8 +98,28 @@ async function handleMessage({ topic, partition, message }) {
 }
 
 async function startDashboardBroadcasterConsumer() {
-  await consumer.connect();
-  await consumer.subscribe({ topic: KAFKA_SCORED_TOPIC, fromBeginning: FROM_BEGINNING });
+  // retryStartup here is unrelated to this file's no-retry message
+  // policy above -- it only covers the one-time startup connect/
+  // subscribe step. See retryWithBackoff.js's retryStartup()
+  // docstring: a fresh broker can transiently reject this subscribe
+  // with UNKNOWN_TOPIC_OR_PARTITION while auto-creating
+  // "scored-transactions". Without this, a consumer that lost that
+  // race would never start at all -- a much bigger gap than the
+  // per-message skip-and-log policy this file otherwise uses.
+  await retryStartup(
+    async () => {
+      await consumer.connect();
+      await consumer.subscribe({ topic: KAFKA_SCORED_TOPIC, fromBeginning: FROM_BEGINNING });
+    },
+    {
+      baseDelayMs: RETRY_BASE_DELAY_MS,
+      maxDelayMs: RETRY_MAX_DELAY_MS,
+      onRetry: (attempt, err, delayMs) => {
+        console.log(`[dashboard-broadcaster] connect/subscribe attempt ${attempt} failed: ${err.message}`);
+        console.log(`[dashboard-broadcaster] retrying in ${delayMs}ms...`);
+      },
+    }
+  );
 
   await consumer.run({
     autoCommit: false,
