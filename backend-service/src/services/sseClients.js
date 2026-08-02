@@ -1,8 +1,9 @@
 /**
  * Shared in-memory registry of open SSE connections (ARCHITECTURE.md
  * section 5.6). Used by controllers/streamController.js (register/
- * unregister on connect/disconnect) and services/transactionProcessor.js
- * and services/statsBroadcaster.js (broadcast on new events/ticks).
+ * unregister on connect/disconnect), messaging/dashboardBroadcasterConsumer.js
+ * (broadcast on new scored transactions), and services/statsBroadcaster.js
+ * (broadcast on its independent timer).
  */
 
 const clients = new Set();

@@ -7,7 +7,23 @@
 const Redis = require("ioredis");
 const { REDIS_HOST, REDIS_PORT, TOP_RISK_LIMIT } = require("../config");
 
-const redis = new Redis({ host: REDIS_HOST, port: REDIS_PORT });
+// enableOfflineQueue: false makes a command reject immediately when
+// the connection is down, instead of ioredis's default behavior of
+// queueing it and silently retrying up to maxRetriesPerRequest (20)
+// times with its own backoff before finally rejecting. That default
+// only matters during an outage -- it's invisible on the happy path --
+// but it matters a lot there: messaging/redisUpdaterConsumer.js relies
+// on updateStats() failing fast so it can log-and-move-on without
+// retrying, and a slow-to-reject call was measured to run long enough
+// to blow through Kafka's consumer session timeout and crash that
+// consumer entirely. The silent .on('error') listener below is
+// ioredis's own documented recommendation for any long-lived client:
+// without one, Node reports every background reconnect-attempt
+// failure as an "Unhandled error event", which is just noise here
+// since every caller of updateStats()/getStats() already handles
+// failures in its own try/catch.
+const redis = new Redis({ host: REDIS_HOST, port: REDIS_PORT, enableOfflineQueue: false });
+redis.on("error", () => {});
 
 function todayKey() {
   return new Date().toISOString().slice(0, 10); // e.g. "2026-07-26"

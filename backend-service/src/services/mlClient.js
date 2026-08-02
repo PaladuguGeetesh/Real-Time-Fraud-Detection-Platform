@@ -1,6 +1,6 @@
 /**
  * Client for the ML Service's /predict endpoint (ARCHITECTURE.md
- * sections 5.2/5.3). Called from services/transactionProcessor.js.
+ * sections 5.2/5.3). Called from messaging/scoringConsumer.js.
  *
  * Uses native fetch (built into Node 18+) rather than adding axios as
  * a dependency for one HTTP call.

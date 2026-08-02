@@ -33,21 +33,33 @@ Kaggle CSV
           │ consume
           ▼
 ┌─────────────────────┐        HTTP POST /predict     ┌──────────────────┐
-│ Backend Service     │ ─────────────────────────────▶│ ML Service       │
-│ (Node.js + Express) │ ◀───────────────────────────── │ (Python/FastAPI) │
-│  orchestrator       │        {prediction, score}     │ XGBoost          │
-└──┬──────────┬───────┘                                └──────────────────┘
-   │ write    │ update
-   ▼          ▼
-┌────────┐  ┌────────┐
-│ MySQL  │  │ Redis  │  (permanent record)  (hot aggregates)
-└────────┘  └────────┘
-   │
-   │ push newTransaction (SSE)
-   ▼
-┌─────────────────────┐
-│ React Dashboard     │  live feed, alerts, charts, filters
-└─────────────────────┘
+│ Scoring Consumer    │ ─────────────────────────────▶│ ML Service       │
+│ (Backend Service)   │ ◀───────────────────────────── │ (Python/FastAPI) │
+└─────────┬───────────┘        {prediction, score}     │ XGBoost          │
+          │ produce                                    └──────────────────┘
+          ▼
+     ┌─────────┐
+     │  Kafka  │  topic: scored-transactions
+     └────┬────┘
+          │ consume -- fans out to 4 independent consumer
+          │ groups, all running in the same Backend Service
+          │ process
+          │
+          ├──────────────┬────────────────────┬─────────────────────┐
+          ▼               ▼                     ▼                     ▼
+   ┌─────────────┐  ┌─────────────┐    ┌──────────────────┐  ┌──────────────────┐
+   │ MySQL       │  │ Redis       │    │ Dashboard         │  │ Audit Log        │
+   │ Writer      │  │ Updater     │    │ Broadcaster       │  │ Writer           │
+   │ Consumer    │  │ Consumer    │    │ Consumer          │  │ Consumer         │
+   └──────┬──────┘  └──────┬──────┘    └─────────┬─────────┘  └─────────┬────────┘
+          ▼                ▼                     │ push newTransaction  ▼
+   ┌─────────────┐  ┌─────────────┐              │ (SSE)          ┌──────────────┐
+   │ MySQL       │  │ Redis       │              ▼                │ MySQL        │
+   │ (permanent  │  │ (hot        │       ┌──────────────────┐    │ AuditLog     │
+   │  record)    │  │  aggregates)│       │ React Dashboard   │    │ table        │
+   └─────────────┘  └─────────────┘       │ live feed, alerts,│    └──────────────┘
+                                           │ charts, filters   │
+                                           └──────────────────┘
 ```
 
 Everything runs in Docker, brought up with a single `docker compose up`.
@@ -62,7 +74,7 @@ Single-responsibility is the design rule. If a service starts doing two unrelate
 |---|---------|-------|-----------------------|
 | 1 | **Transaction Generator** | Python | Read dataset rows, enrich with fake metadata, publish to Kafka |
 | 2 | **Kafka** | apache/kafka:4.3.1 (KRaft mode) | Decouple producer from consumer; buffer events |
-| 3 | **Backend Service** | Node.js + Express | Orchestrate: consume → call ML → persist → cache → push |
+| 3 | **Backend Service** | Node.js + Express | Five independent Kafka consumer groups in one process: Scoring Consumer (consumes `transactions`, calls ML, publishes to `scored-transactions`), MySQL Writer, Redis Updater, Dashboard Broadcaster, and Audit Log Writer (the latter four all consume `scored-transactions` independently) |
 | 4 | **ML Service** | Python + FastAPI | Predict fraud from features; return prediction + risk score |
 | 5 | **MySQL** | Official image | Permanent system of record for every processed transaction |
 | 6 | **Redis** | Official image | Fast in-memory store for dashboard aggregate stats |
@@ -143,6 +155,40 @@ Notes:
 }
 ```
 
+### 5.3a Scored Transaction Event — Scoring Consumer → Kafka (`scored-transactions`)
+
+Published by the Scoring Consumer to Kafka topic `scored-transactions` after a successful `/predict` call. This is the original Transaction Event (§5.1) plus the scoring result, fanned out to the four downstream consumers (MySQL Writer, Redis Updater, Dashboard Broadcaster, Audit Log Writer) — none of which call the ML service themselves. JSON:
+
+```json
+{
+  "transactionId": "txn_a1b2c3d4",
+  "bankId": "bank_default",
+  "timestamp": "2026-07-19T10:30:00.000Z",
+  "features": {
+    "Time": 12345.0,
+    "V1": -1.359, "V2": 0.072, "...": "...", "V28": -0.021,
+    "Amount": 149.62
+  },
+  "metadata": {
+    "merchant": "Amazon",
+    "country": "US",
+    "cardType": "Visa",
+    "device": "iOS App"
+  },
+  "groundTruth": 0,
+  "prediction": "fraud",
+  "riskScore": 0.87,
+  "modelVersion": "xgboost-v1",
+  "predictionCorrect": false
+}
+```
+
+Notes:
+- `transactionId`, `bankId`, `timestamp`, `features`, `metadata`, and `groundTruth` are carried through unchanged from §5.1 — `metadata` stays **nested** here, unlike the flattened MySQL row shape in §5.4.
+- `prediction`, `riskScore`, and `modelVersion` are the ML service's response (§5.3), unchanged.
+- `predictionCorrect` is computed **once**, by the Scoring Consumer, from `prediction` and `groundTruth`. Every downstream consumer reads this field rather than recomputing it, so there's a single source of truth for correctness instead of four separate (and potentially divergent) calculations.
+- `groundTruth` is still never sent to the ML service's `/predict` call (§5.1's rule stands) — it travels alongside the event only so the Scoring Consumer can compute `predictionCorrect` internally, then continues downstream for the Audit Log Writer and dashboard display.
+
 ### 5.4 Stored Transaction — Backend → MySQL
 
 The merged record (system of record). Table: `transactions`, written and read exclusively through a `TransactionRepository` (§7.1) — never via ad hoc queries scattered through the codebase.
@@ -161,7 +207,7 @@ The merged record (system of record). Table: `transactions`, written and read ex
 | `riskScore` | `FLOAT` | |
 | `modelVersion` | `VARCHAR` | |
 | `groundTruth` | `TINYINT` | the real `Class` — carried for **evaluation/display only**; the Backend must **never** send it to the ML service (§5.1 rule stands) |
-| `predictionCorrect` | `BOOLEAN` | `prediction == (groundTruth ? "fraud" : "safe")`, computed by the Backend at write time and stored so the dashboard shows live accuracy without recomputing on every read (resolves §8 item 9) |
+| `predictionCorrect` | `BOOLEAN` | `prediction == (groundTruth ? "fraud" : "safe")`, computed once by the Scoring Consumer (§5.3a) and carried through the `scored-transactions` event; the MySQL Writer stores it as-is so the dashboard shows live accuracy without recomputing on every read (resolves §8 item 9) |
 | `features` | `JSON` | `Time`, `V1`–`V28`, `Amount` as one JSON blob — kept for audit/retrain |
 
 Two shape decisions worth calling out:
@@ -234,6 +280,8 @@ Routes (`routes/apiRoutes.js`) map each path to a controller, which calls the re
 - **SSE (Server-Sent Events):** a monitoring dashboard is only useful if it reflects *now* — push beats polling. Chosen over Socket.io because the data flow here is purely server-to-client (live transaction and stat updates); nothing requires the dashboard to push data back over the same channel. SSE is plain HTTP (`text/event-stream`), so it scales more simply: standard load balancers and reverse proxies understand and pass through a long-lived HTTP response natively, whereas Socket.io's WebSocket-first transport needs a Redis adapter to fan events out across multiple Backend instances and sticky sessions at the load balancer to keep a client pinned to the instance holding its connection.
 - **XGBoost (supervised):** `Class` labels are genuinely available for this dataset and, in real fraud systems, eventually arrive too (via chargebacks/disputes) — so a supervised model can legitimately learn from them rather than only detecting statistical outliers. The measured gap was decisive, not marginal: XGBoost reached ~0.88 AUPRC versus Isolation Forest's ~0.28 after equivalent feature engineering and tuning, roughly 3x better fundamental ranking ability. Full model comparison and rationale in `ML_METHODOLOGY.md`.
 - **Docker Compose:** each service isolated in its own container, whole stack up with one command — mirrors real microservice deployment.
+- **Second Kafka topic (`scored-transactions`) after scoring:** splitting scoring from downstream persistence/caching/push/audit lets each of those four concerns run as its own consumer, so a failure or slowdown in one (say, Redis being down) never blocks or delays the others — MySQL still writes, the dashboard still gets pushed, the audit log still records. This is the point where Kafka's ability to run multiple independent consumer groups against the same stream is actually exercised, not just a theoretical benefit of picking a message broker over a plain queue.
+- **Tiered failure handling across the five consumers:** the Scoring Consumer, MySQL Writer, and Audit Log Writer are the "permanent-record" consumers — losing or skipping one of their messages would be a real gap (a transaction never scored, never stored, or never audited) — so all three retry indefinitely with capped exponential backoff on failure. The dataset is clean and every realistic failure here is transient infrastructure (a service restart, a network blip), not a malformed message that could never succeed no matter how many times it's retried. The Redis Updater and Dashboard Broadcaster are different: their outputs are non-critical, regenerable views (a stats aggregate, a live push) rather than the system of record, so they skip and log on failure instead of blocking the partition behind them.
 
 ### 7.1 The Repository Pattern
 
@@ -254,14 +302,14 @@ These are deliberately not locked yet. We'll decide each when we reach the relev
 
 1. **Isolation Forest `contamination`** parameter and the **risk-score threshold** for flagging fraud — tune against `Class` during training.
 2. **Risk score normalization** — Isolation Forest gives an anomaly score; decide how to map it to a clean 0.0–1.0.
-3. **Kafka topology** — single topic `transactions`, single partition to start; revisit partitions/consumer groups if we simulate scale.
+3. ~~Kafka topology~~ **RESOLVED:** two topics — `transactions` (Generator → Scoring Consumer) and `scored-transactions` (Scoring Consumer → the other four consumers), both single partition. Revisit partitions/consumer groups if we ever simulate scale beyond this project's demo throughput.
 4. ~~MongoDB shape~~ **RESOLVED:** MySQL, single `transactions` table (full column list in §5.4), accessed exclusively through a `TransactionRepository` (§7.1) rather than direct queries scattered through the codebase. `features` (`Time`, `V1`–`V28`, `Amount`) stored as one JSON column rather than 30 individual columns, since those fields are only ever read/written wholesale for audit/retraining, never queried into individually.
 5. **Redis daily reset** — how `fraudToday` resets (TTL vs. date-keyed counters).
-6. **Backend resilience** — retry/dead-letter behavior if the ML service is down when a message is consumed.
+6. ~~Backend resilience~~ **RESOLVED:** no dead-letter queue in the final design. On failure, the Scoring Consumer, MySQL Writer, and Audit Log Writer retry indefinitely with capped exponential backoff (§7) rather than giving up after N attempts or routing to a DLQ — every transaction must eventually be scored, stored, and audited, even through an extended outage. The Redis Updater and Dashboard Broadcaster skip and log on failure instead, since their outputs are non-critical, regenerable views (§7).
 7. **Generator replay speed / behavior** — 1 row/sec default, configurable via env var (`PUBLISH_INTERVAL_SECONDS`) for demos. At end of dataset, loop back to the start (continuous demo stream) rather than stopping. Reading strategy: load the CSV once into memory (150MB fits comfortably) rather than streaming row-by-row — simpler, and size doesn't justify streaming.
    - **Fraud injection for demo visibility:** because fraud is only 0.17% of the data, a faithful replay leaves long dead stretches where the dashboard shows no fraud and looks broken. To fix this *without faking model behavior*, the Generator splits the dataset into two pools at load time (`Class==1` fraud rows, `Class==0` legit rows) and injects a **real** fraud row every `FRAUD_INJECTION_EVERY_N` transactions (env var, default 15; set to 0 to disable and replay authentically). This controls the *pacing of the input stream* only — the ML model still independently decides fraud/safe on every transaction. Legitimate for a demo tool as long as it's stated plainly; what's off-limits is tampering with the model's *output*, which this does not do.
 8. **Security** — out of scope for the demo (no auth); stated explicitly.
-9. ~~Live prediction-vs-`groundTruth` comparison~~ **RESOLVED:** the Backend computes a `predictionCorrect` boolean (`prediction == (groundTruth ? "fraud" : "safe")`) at write time and stores it alongside the record (§5.4), so the dashboard reads live accuracy directly instead of recomputing it on every request. This is only possible because we replay a labeled historical dataset — a real production system wouldn't have the label at prediction time (it arrives weeks later via chargebacks). `groundTruth` still travels *around* the ML service, never into it (§5.1 rule stands).
+9. ~~Live prediction-vs-`groundTruth` comparison~~ **RESOLVED, fully implemented:** the Scoring Consumer computes a `predictionCorrect` boolean (`prediction == (groundTruth ? "fraud" : "safe")`) once, immediately after scoring, and carries it downstream as part of the `scored-transactions` event (§5.3a); the MySQL Writer stores it as-is (§5.4) so the dashboard reads live accuracy directly instead of recomputing it on every request. This is only possible because we replay a labeled historical dataset — a real production system wouldn't have the label at prediction time (it arrives weeks later via chargebacks). `groundTruth` still travels *around* the ML service, never into it (§5.1 rule stands).
 
 ---
 
@@ -287,10 +335,11 @@ fraud-detection-system/
 ├── backend-service/
 │   ├── Dockerfile
 │   ├── package.json
+│   ├── prisma/
+│   │   └── schema.prisma        ← `Transaction` and `AuditLog` models; migrations applied via Prisma Migrate
 │   └── src/
 │       ├── config.js            ← centralized env vars/constants (PORT, ML_SERVICE_URL, Kafka/Redis settings, etc.)
-│       ├── server.js            ← app bootstrap: mounts routes, starts listener/stats broadcaster/Kafka consumer
-│       ├── kafkaConsumer.js     ← Kafka connect/subscribe/run only; delegates each message to services/transactionProcessor.js
+│       ├── server.js            ← app bootstrap: mounts routes, starts stats broadcaster, starts all five Kafka consumers
 │       ├── routes/
 │       │   └── apiRoutes.js     ← URL → handler mapping only (health, stats, transactions, stream)
 │       ├── controllers/
@@ -301,10 +350,17 @@ fraud-detection-system/
 │       │   ├── mlClient.js               ← calls ML Service's /predict
 │       │   ├── cache.js                  ← Redis aggregate stats
 │       │   ├── sseClients.js             ← in-memory SSE connection registry
-│       │   ├── statsBroadcaster.js       ← periodic statsUpdate broadcast (debounced on totalProcessed)
-│       │   └── transactionProcessor.js   ← Kafka-message pipeline: score → save → update stats → broadcast
+│       │   └── statsBroadcaster.js       ← periodic statsUpdate broadcast (debounced on totalProcessed)
+│       ├── messaging/
+│       │   ├── retryWithBackoff.js             ← shared retry-forever-with-capped-backoff helper, heartbeat-aware
+│       │   ├── scoringConsumer.js              ← consumes transactions, calls ML, publishes to scored-transactions
+│       │   ├── mysqlWriterConsumer.js          ← consumes scored-transactions, saves via transactionRepository
+│       │   ├── redisUpdaterConsumer.js         ← consumes scored-transactions, updates Redis aggregates (skip-and-log on failure)
+│       │   ├── auditLogConsumer.js             ← consumes scored-transactions, saves fraud events via auditLogRepository (retries forever)
+│       │   └── dashboardBroadcasterConsumer.js ← consumes scored-transactions, pushes newTransaction over SSE (skip-and-log on failure)
 │       ├── repository/
-│       │   └── transactionRepository.js  ← thin Prisma wrapper (§7.1): save/findRecent/findById/findPaginated
+│       │   ├── transactionRepository.js  ← thin Prisma wrapper (§7.1): save/findRecent/findById/findPaginated
+│       │   └── auditLogRepository.js     ← thin Prisma wrapper: save only, no findX() -- no REST/UI access to this table by design
 │       └── scripts/             ← standalone manual verification scripts, not part of the runtime path
 │           ├── testRepository.js
 │           ├── testGetStats.js
@@ -366,6 +422,8 @@ Build bottom-up so each layer can be tested before the next depends on it.
 | 3 — Backend | ✅ Complete | Kafka -> XGBoost -> MySQL/Redis/SSE fully wired and verified; restructured into modular routes/controllers/services layout; see PHASE3_BACKEND_JOURNEY.md for full build log and failure-mode analysis |
 | 4 — Dashboard | ⬜ Not started | |
 | 5 — Polish | ⬜ Not started | |
+| Event-Driven Decoupling (Backend) | ✅ Complete | Second Kafka topic (`scored-transactions`) added; the single orchestrator consumer was replaced with five independent consumer groups (Scoring, MySQL Writer, Redis Updater, Dashboard Broadcaster, Audit Log Writer) running in one process; tiered failure handling (retry-forever-with-capped-backoff for the three permanent-record consumers, skip-and-log for the two regenerable-view consumers); verified independent under ML, MySQL, and Redis outages with the rest of the pipeline unaffected |
+| Future — Containerization | ⬜ Not started | |
 | Future — Multi-tenancy + JWT | ⬜ Planned | See §12.1 |
 
 *Update this table as we go so the doc always reflects reality.*
@@ -411,3 +469,19 @@ This supersedes §8 item 8's "no auth" note — auth moves from out-of-scope to 
 **Migration path, if ever needed:** contained to the transport layer. The Backend's event-producing logic (Kafka consumer, ML client, MySQL repository, Redis stats) is decoupled from how updates reach the browser — the same separation-of-concerns principle as the repository pattern (§7.1) — so swapping the SSE endpoint for a WebSocket/Socket.io connection would not require touching any of that logic. Only the transport layer and the frontend's event-receiving code would change, plus whatever new bidirectional events the feature specifically needs (e.g. a `markReviewed` message sent client → server).
 
 **What does NOT require this:** ordinary dashboard actions — filtering, pagination, an analyst triggering an escalation email — do not need bidirectional infrastructure. Those remain ordinary REST calls regardless of transport choice, since the interaction is a discrete request/response, not continuous shared state.
+
+### 12.3 Redis Stat Resync-on-Recovery (designed, not built)
+
+**Problem:** Redis's counters (`INCR`) never self-correct after a skipped update — if N messages are missed during a Redis outage, `totalProcessed` and related stats are permanently undercounted by N, with no automatic correction. This is a cosmetic accuracy issue, not data loss (MySQL and the audit log remain fully correct regardless, since they're independent consumers).
+
+**Designed fix, not built:** track whether a Redis update failure just occurred. On the next successful update after a gap, do a one-time resync — recompute `totalProcessed`, `fraudCount:<date>`, `correctCount`, and `topRisk` directly from MySQL (the guaranteed-complete source of truth) and overwrite the Redis values, before resuming normal incremental updates. This mirrors the same principle used elsewhere in this project for handling a reconnect after missed updates: rather than trying to patch or replay individual missed events, refetch current, complete state directly from the durable source of truth once connectivity is restored.
+
+**Why deferred:** a real Redis outage during actual use of this project is unlikely, and the drift is cosmetic, not data loss.
+
+### 12.4 5xx-vs-4xx Failure Classification for the Scoring Consumer (designed, not built)
+
+**Problem:** the Scoring Consumer's retry logic treats every ML-call failure identically — it retries the specific failing message with capped exponential backoff, whether the cause is a brief service restart or a longer outage. During a longer outage, each message that arrives independently goes through its own retry cycle rather than the system recognizing "the service itself is down" as a single event.
+
+**Designed fix, not built:** classify failures by type. A connection-level failure (`ECONNREFUSED`/`ECONNRESET`) or an HTTP 5xx response means the ML service itself is unhealthy (the server's fault, per HTTP semantics) — on this, pause the whole consumer immediately and health-check in the background, rather than retrying only the current message. An HTTP 4xx response means the request itself was rejected (the client's fault) — keep today's per-message retry for this case, since it's a different kind of problem.
+
+**Why deferred:** the current per-message retry already fully prevents data loss (nothing is ever skipped or lost, per the "no DLQ, retry forever" design) — this refinement would only improve efficiency during a sustained outage, not correctness, so it was judged lower priority than shipping the working, if less efficient, version.

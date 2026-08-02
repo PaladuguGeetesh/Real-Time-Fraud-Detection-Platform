@@ -27,3 +27,31 @@ model Transaction {
   @@index([country])
   @@index([timestamp])
 }
+
+// A self-contained snapshot of every fraud-predicted transaction, not a
+// foreign-key reference to Transaction -- stays meaningful on its own
+// even if the Transaction table is ever reset/truncated. Written by
+// messaging/auditLogConsumer.js, which only saves rows where
+// prediction === "fraud"; there is no REST endpoint or dashboard UI
+// for this table by design -- direct SQL is the intended access
+// pattern for now. No @@index([prediction]) here (unlike Transaction)
+// since every row in this table already has prediction = "fraud" --
+// an index with no cardinality buys nothing.
+model AuditLog {
+  transactionId     String   @id
+  bankId            String
+  timestamp         DateTime
+  amount            Float
+  merchant          String
+  country           String
+  cardType          String
+  device            String
+  prediction        String
+  riskScore         Float
+  modelVersion      String
+  groundTruth       Int
+  predictionCorrect Boolean
+  features          Json
+
+  @@index([timestamp])
+}
