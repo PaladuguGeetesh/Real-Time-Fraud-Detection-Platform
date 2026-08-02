@@ -423,7 +423,7 @@ Build bottom-up so each layer can be tested before the next depends on it.
 | 4 — Dashboard | ⬜ Not started | |
 | 5 — Polish | ⬜ Not started | |
 | Event-Driven Decoupling (Backend) | ✅ Complete | Second Kafka topic (`scored-transactions`) added; the single orchestrator consumer was replaced with five independent consumer groups (Scoring, MySQL Writer, Redis Updater, Dashboard Broadcaster, Audit Log Writer) running in one process; tiered failure handling (retry-forever-with-capped-backoff for the three permanent-record consumers, skip-and-log for the two regenerable-view consumers); verified independent under ML, MySQL, and Redis outages with the rest of the pipeline unaffected |
-| Future — Containerization | ⬜ Not started | |
+| Containerization (Phase 6) | ✅ Complete | All 7 services containerized (§13); healthcheck-based startup ordering (`condition: service_healthy`) replaces plain `depends_on` for Kafka/MySQL/Redis/ML Service; Kafka topic/consumer-offset persistence via a named volume, with a one-shot init container fixing a real Docker volume-permissions conflict; verified failure-mode parity with the non-containerized system across all three outage scenarios (ML, MySQL, Redis) |
 | Future — Multi-tenancy + JWT | ⬜ Planned | See §12.1 |
 
 *Update this table as we go so the doc always reflects reality.*
@@ -485,3 +485,43 @@ This supersedes §8 item 8's "no auth" note — auth moves from out-of-scope to 
 **Designed fix, not built:** classify failures by type. A connection-level failure (`ECONNREFUSED`/`ECONNRESET`) or an HTTP 5xx response means the ML service itself is unhealthy (the server's fault, per HTTP semantics) — on this, pause the whole consumer immediately and health-check in the background, rather than retrying only the current message. An HTTP 4xx response means the request itself was rejected (the client's fault) — keep today's per-message retry for this case, since it's a different kind of problem.
 
 **Why deferred:** the current per-message retry already fully prevents data loss (nothing is ever skipped or lost, per the "no DLQ, retry forever" design) — this refinement would only improve efficiency during a sustained outage, not correctness, so it was judged lower priority than shipping the working, if less efficient, version.
+
+### 12.5 `/api/stats` Failure Mode (found during containerization testing, now fixed)
+
+**Problem, found not assumed:** every other Redis-dependent path in this system degrades gracefully on a Redis outage — the periodic `statsUpdate` broadcast catches the failure and simply skips that tick (§7's tiered failure handling), so the dashboard's live feed keeps updating while only the stats cards freeze. The `/api/stats` REST endpoint (§5.7) didn't follow that same pattern: a direct request to it during a Redis outage returned a generic `HTTP 500`, indistinguishable from an actual server bug.
+
+**Fix:** the endpoint now returns `HTTP 503` (Service Unavailable) with a clear `{ "error": "Stats temporarily unavailable", "reason": "cache unreachable" }` body — an accurate signal that this is a known, transient dependency failure, not a genuine server error. The real underlying error is still logged server-side for debugging; only the client-facing response stays generic, so no internal error detail leaks into it.
+
+---
+
+## 13. Containerization (Phase 6)
+
+All 7 services now run via `docker-compose.yml`: `kafka`, `mysql`, `redis`, `ml-service`, `backend-service`, `generator-service`, `dashboard-service`. `docker compose up -d --build` brings up the entire stack from a cold start.
+
+### 13.1 Internal Networking: Container Hostnames vs. `localhost`
+
+Services that connect *out* to other containers use container hostnames via environment variables, never `localhost`: the Backend Service reaches Kafka at `kafka:19092` (the internal listener, distinct from the host-facing `localhost:9092`), MySQL at `mysql`, Redis at `redis`, and the ML Service at `http://ml-service:8000`; the Generator reaches Kafka the same way, at `kafka:19092`. Every one of these is env-var-driven with a `localhost`-based default, so the exact same code still runs correctly outside Docker for local host development — only the environment values differ between the two modes.
+
+The Dashboard is the one deliberate exception: its API client and its SSE `EventSource` connection stay hardcoded to `http://localhost:4000`. That code runs in the user's own browser, entirely outside Docker's network — a container hostname like `backend-service` would mean nothing there, since the browser has no DNS visibility into the Compose network at all.
+
+### 13.2 Startup Ordering: Healthchecks, Not Just `depends_on`
+
+Plain `depends_on` only waits for a container to *start*, not to be genuinely ready to accept connections — a real gap, e.g. when MySQL's process is running but hasn't finished initializing yet. `kafka`, `mysql`, `redis`, and `ml-service` each have a real `healthcheck:` block (`mysqladmin ping`, `redis-cli ping`, a broker-protocol round trip for Kafka, and a Python `urllib` request against the ML service's docs page, since its base image has no `curl`), and the Backend Service's `depends_on` uses `condition: service_healthy` against all four before it starts at all.
+
+This solves a real, previously-hidden bug: on a genuinely fresh Kafka broker (no topics yet), all five of the Backend's consumer groups could hit `UNKNOWN_TOPIC_OR_PARTITION`, racing Kafka's own asynchronous auto-topic-creation on their very first subscribe. Every consumer's startup used to attempt this exactly once, with no retry — a consumer that lost that race never started for the rest of the container's lifetime. Fixed with a dedicated startup-retry helper, deliberately separate from the message-processing retry helper (§7's tiered failure handling), since no consumer group session exists yet at that point to send heartbeats against — the two helpers solve genuinely different problems: staying alive during a slow retry mid-session, versus retrying before a session even exists.
+
+### 13.3 Kafka Persistence
+
+Kafka originally had no volume at all — every container recreation wiped its KRaft log directory entirely, which is exactly what made the topic-race above possible in the first place: a fresh, empty broker on every restart. A named volume now persists topics, messages, and consumer group offsets across restarts, the same pattern already used for MySQL's data directory.
+
+This surfaced a real permissions conflict, not a hypothetical one: a brand-new Docker volume is owned by `root` by default, but the Kafka image deliberately runs as a non-root user for security, so its first-ever write to that (root-owned) directory failed outright. Fixed with a one-shot init container that `chown`s the volume to the correct user, then exits, before Kafka starts — chosen over the two obvious alternatives: running Kafka as root (a real security downgrade the image specifically avoids by default) or fixing the permissions manually outside the compose file (works once on one machine, breaks again on a fresh clone or a teammate's machine).
+
+### 13.4 Dashboard: Multi-Stage Build
+
+Built via a multi-stage Docker build: a Node stage runs the production build and is discarded entirely afterward; the final image contains only the built static files, served by `nginx:alpine`, with no Node or npm present in the final image at all. Chosen over running Vite's dev server inside the container, since a dev server is not how a real frontend gets deployed — the whole point of the multi-stage build is to ship exactly what a production deployment would.
+
+This required one addition beyond the build itself: an nginx routing fallback that serves `index.html` for any unmatched path. The dashboard uses client-side routing (e.g. a `/search` path with no literal `/search` file on disk) — Vite's dev server handles that automatically, but a plain static file server does not, so a direct request or hard refresh on such a route would 404 without this fallback.
+
+### 13.5 Generator: Dataset as a Bind Mount
+
+The ~150MB `creditcard.csv` dataset is mounted into the Generator's container as a read-only bind volume rather than baked into the image. This keeps the image itself small and lets the dataset be swapped out (e.g. a different sample, a refreshed export) without ever needing a rebuild.
