@@ -1,111 +1,121 @@
+/**
+ * Design tokens (Sentinel Fraud Systems visual redesign). Two
+ * explicit theme blocks, selected by a `data-theme` attribute on
+ * <html> -- state/ThemeContext.jsx sets it, index.html's inline
+ * script sets it once on first paint (see that file) so there's no
+ * flash of the wrong theme before React mounts. `prefers-color-scheme`
+ * is used only as the very first fallback in that inline script, not
+ * as a live CSS media query -- once set, the explicit toggle always
+ * wins, in both directions, regardless of the OS setting.
+ */
+
+:root,
+:root[data-theme='light'] {
+  /* Surfaces */
+  --color-bg: #f6f5fb;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f6f5fb;
+  --color-border: #e6e4f0;
+
+  /* Text */
+  --color-text: #17161f;
+  --color-text-secondary: #6b6b7a;
+  --color-text-tertiary: #9b9aa8;
+
+  /* Brand accent -- indigo/violet */
+  --color-accent: #4f39f6;
+  --color-accent-hover: #4229e0;
+  --color-accent-bg: #ebe8fd;
+  --color-accent-text: #4f39f6;
+
+  /* Fraud / danger -- red */
+  --color-danger: #dc2626;
+  --color-danger-bg: #fdecec;
+  --color-danger-border: #dc2626;
+
+  /* Safe -- teal */
+  --color-safe: #0d9488;
+  --color-safe-bg: #e6f7f5;
+
+  --shadow-card: 0 1px 2px rgba(23, 22, 31, 0.04), 0 1px 3px rgba(23, 22, 31, 0.06);
+}
+
+:root[data-theme='dark'] {
+  --color-bg: #101018;
+  --color-surface: #17171f;
+  --color-surface-alt: #1c1c26;
+  --color-border: #2a2a38;
+
+  --color-text: #f2f1f7;
+  --color-text-secondary: #a3a2b3;
+  --color-text-tertiary: #71707f;
+
+  --color-accent: #7c6ef5;
+  --color-accent-hover: #8f83ff;
+  --color-accent-bg: rgba(124, 110, 245, 0.16);
+  --color-accent-text: #a79cff;
+
+  --color-danger: #f87171;
+  --color-danger-bg: rgba(220, 38, 38, 0.14);
+  --color-danger-border: #f87171;
+
+  --color-safe: #2dd4bf;
+  --color-safe-bg: rgba(13, 148, 136, 0.16);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Consolas, monospace;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
-
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
-}
-
-body {
-  margin: 0;
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
+* {
   box-sizing: border-box;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+html,
+body {
+  margin: 0;
+  padding: 0;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
+body {
+  font-family: var(--font-sans);
+  color: var(--color-text);
+  background: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
+
+#root {
+  min-height: 100svh;
 }
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  color: var(--color-text);
+}
+
 p {
   margin: 0;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+button,
+input,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+a {
+  color: var(--color-accent-text);
 }

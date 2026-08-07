@@ -492,6 +492,14 @@ This supersedes §8 item 8's "no auth" note — auth moves from out-of-scope to 
 
 **Fix:** the endpoint now returns `HTTP 503` (Service Unavailable) with a clear `{ "error": "Stats temporarily unavailable", "reason": "cache unreachable" }` body — an accurate signal that this is a known, transient dependency failure, not a genuine server error. The real underlying error is still logged server-side for debugging; only the client-facing response stays generic, so no internal error detail leaks into it.
 
+### 12.6 Token Blacklisting on Logout (designed, not built)
+
+**Problem:** the current auth implementation clears the session cookie client-side on logout, but the JWT itself is stateless and remains cryptographically valid until its natural expiry — if a token were captured by someone else during an active session, logout would not actually revoke their access.
+
+**Designed fix, not built:** store the token's `jti` (JWT ID) in Redis on logout, with a TTL matching the token's remaining lifetime, and check it in the auth middleware on every request. Fail-open if Redis is unreachable, consistent with how Redis outages are treated everywhere else in this project (§7's tiered failure handling) — an unreachable blacklist store should never itself lock every analyst out.
+
+**Why deferred:** the current system has a single hardcoded credential and one intended user, so the realistic threat this protects against — a second party reusing a captured session after the legitimate user logs out — doesn't meaningfully apply yet. This naturally pairs with the multi-tenancy work already listed above (§12.1) — worth building together once there are real, distinct users whose logout needs to genuinely revoke access, rather than as a standalone addition to a single hardcoded login now.
+
 ---
 
 ## 13. Containerization (Phase 6)

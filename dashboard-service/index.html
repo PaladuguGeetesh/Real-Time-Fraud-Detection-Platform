@@ -4,7 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>dashboard-service</title>
+    <title>Sentinel Fraud Systems</title>
+    <script>
+      // Blocking, runs before first paint -- sets data-theme from the
+      // stored preference (state/ThemeContext.jsx owns this key) or
+      // the OS preference on first-ever visit, so the page never
+      // flashes the wrong theme while React is still loading.
+      (function () {
+        var stored = localStorage.getItem('sentinel-theme');
+        var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

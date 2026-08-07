@@ -161,6 +161,17 @@ services:
       KAFKA_BROKER: kafka:19092
       REDIS_HOST: redis
       ML_SERVICE_URL: http://ml-service:8000
+      # .env is excluded from this image's build context on purpose
+      # (it holds host-only values like a localhost DATABASE_URL --
+      # see .dockerignore), so these have to be supplied here instead;
+      # config.js's fail-fast guard is what caught them being missing
+      # the first time this was wired up. $$ escapes a literal `$` in
+      # a compose file -- ANALYST_PASSWORD_HASH is a bcrypt hash and
+      # genuinely contains `$` characters, which Compose would
+      # otherwise try to interpret as variable interpolation.
+      JWT_SECRET: 3b1dcafe84b99c4d1ecbcbe00974ddc8cf57b5a9a6b7f6cacf2223103aaece3021549620b8fb924479f983ef668d05b6
+      ANALYST_USERNAME: analyst
+      ANALYST_PASSWORD_HASH: $$2b$$12$$PAQa913LJgLIhwksxKXkvektwQ6A4evL1dorKS2CBDd59OVmgp8Z2
 
   generator-service:
     build: ./generator-service

@@ -4,6 +4,14 @@
  * files. Same values/defaults throughout; this is a relocation only.
  */
 
+// Explicit, not incidental: @prisma/client happens to auto-load .env
+// as a side effect of its own initialization, but relying on that for
+// unrelated env vars (JWT_SECRET below) would make their availability
+// depend on Node's require() order -- whether some file requiring
+// Prisma happened to run before this one. Loading here, first, is
+// deterministic regardless of require order.
+require("dotenv").config();
+
 const PORT = process.env.PORT || 4000;
 
 const ML_SERVICE_URL = process.env.ML_SERVICE_URL || "http://localhost:8000";
@@ -38,6 +46,31 @@ const TOP_RISK_LIMIT = 20;
 
 const STATS_BROADCAST_INTERVAL_MS = 5000;
 
+// Single hardcoded analyst credential -- no User table, no per-bank
+// scoping (that's multi-tenancy, deliberately deferred future work).
+// JWT_SECRET and ANALYST_PASSWORD_HASH have no defaults on purpose:
+// an app silently running with an undefined signing secret or a
+// missing password hash is worse than one that fails to start, so
+// the guard below throws immediately instead of limping along
+// insecurely.
+const JWT_SECRET = process.env.JWT_SECRET;
+const ANALYST_USERNAME = process.env.ANALYST_USERNAME || "analyst";
+const ANALYST_PASSWORD_HASH = process.env.ANALYST_PASSWORD_HASH;
+const JWT_EXPIRY = "8h";
+const AUTH_COOKIE_NAME = "auth_token";
+
+if (!JWT_SECRET || !ANALYST_PASSWORD_HASH) {
+  throw new Error(
+    "Missing required auth config: JWT_SECRET and ANALYST_PASSWORD_HASH must both be set in the environment."
+  );
+}
+
+// The dashboard's own origin -- CORS must echo this exact value, never
+// a wildcard, since a wildcard origin combined with credentials:true
+// (required for cookies to work cross-origin) isn't something browsers
+// even permit.
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
+
 module.exports = {
   PORT,
   ML_SERVICE_URL,
@@ -51,4 +84,10 @@ module.exports = {
   REDIS_PORT,
   TOP_RISK_LIMIT,
   STATS_BROADCAST_INTERVAL_MS,
+  JWT_SECRET,
+  ANALYST_USERNAME,
+  ANALYST_PASSWORD_HASH,
+  JWT_EXPIRY,
+  AUTH_COOKIE_NAME,
+  CORS_ORIGIN,
 };

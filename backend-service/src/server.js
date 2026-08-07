@@ -11,6 +11,8 @@
  */
 
 const express = require("express");
+const cors = require("cors");
+const cookieParser = require("cookie-parser");
 const routes = require("./routes/apiRoutes");
 const { startStatsBroadcast } = require("./services/statsBroadcaster");
 const { startScoringConsumer } = require("./messaging/scoringConsumer");
@@ -18,15 +20,22 @@ const { startMysqlWriterConsumer } = require("./messaging/mysqlWriterConsumer");
 const { startRedisUpdaterConsumer } = require("./messaging/redisUpdaterConsumer");
 const { startAuditLogConsumer } = require("./messaging/auditLogConsumer");
 const { startDashboardBroadcasterConsumer } = require("./messaging/dashboardBroadcasterConsumer");
-const { PORT } = require("./config");
+const { PORT, CORS_ORIGIN } = require("./config");
 
 const app = express();
 
-const cors = require('cors');
-
+// credentials: true is required for the browser to send/receive the
+// auth cookie cross-origin (the dashboard at :5173 calling the
+// Backend at :4000). origin must stay a specific value, never "*" --
+// browsers reject a wildcard origin combined with credentials:true
+// outright, so this isn't just a tightening, it's the only
+// configuration that actually works once cookies are involved.
 app.use(cors({
-  origin: 'http://localhost:5173'
+  origin: CORS_ORIGIN,
+  credentials: true,
 }));
+app.use(express.json());
+app.use(cookieParser());
 
 app.use(routes);
 

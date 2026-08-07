@@ -1,19 +1,30 @@
-import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './state/AuthContext';
+import { ThemeProvider } from './state/ThemeContext';
 import { StreamProvider } from './state/StreamContext';
 import { StatsProvider } from './state/StatsContext';
 import { LiveFeedProvider } from './state/LiveFeedContext';
 import { SearchProvider } from './state/SearchContext';
-import StatsCards from './components/StatsCards';
-import LiveFeed from './components/LiveFeed';
-import SearchPage from './components/SearchPage';
-import FraudAlert from './components/FraudAlert';
-import TopRiskChart from './components/TopRiskChart';
-import PredictionDistributionChart from './components/PredictionDistributionChart';
+import StatsCardsContainer from './components/StatsCardsContainer';
+import LiveFeedContainer from './components/LiveFeedContainer';
+import SearchPageContainer from './components/SearchPageContainer';
+import FraudAlertContainer from './components/FraudAlertContainer';
+import TopRiskChartContainer from './components/TopRiskChartContainer';
+import PredictionDistributionChartContainer from './components/PredictionDistributionChartContainer';
+import LoginPageContainer from './components/LoginPageContainer';
+import ProtectedRoute from './components/ProtectedRoute';
+import AppLayoutContainer from './components/AppLayoutContainer';
 
 const pageStyle = {
   display: 'flex',
   flexDirection: 'column',
+  gap: '20px',
+};
+
+const chartsRowStyle = {
+  display: 'flex',
   gap: '16px',
+  flexWrap: 'wrap',
 };
 
 function DashboardPage() {
@@ -22,16 +33,13 @@ function DashboardPage() {
       <StatsProvider>
         <LiveFeedProvider>
           <div style={pageStyle}>
-            <nav>
-              <Link to="/search">View Transaction History</Link>
-            </nav>
-            <FraudAlert />
-            <StatsCards />
-            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
-              <TopRiskChart />
-              <PredictionDistributionChart />
+            <FraudAlertContainer />
+            <StatsCardsContainer />
+            <div style={chartsRowStyle}>
+              <TopRiskChartContainer />
+              <PredictionDistributionChartContainer />
             </div>
-            <LiveFeed />
+            <LiveFeedContainer />
           </div>
         </LiveFeedProvider>
       </StatsProvider>
@@ -42,23 +50,46 @@ function DashboardPage() {
 function SearchRoute() {
   return (
     <SearchProvider>
-      <div style={pageStyle}>
-        <nav>
-          <Link to="/">Back to Live Dashboard</Link>
-        </nav>
-        <SearchPage />
-      </div>
+      <SearchPageContainer />
     </SearchProvider>
   );
 }
 
+// Navigation is now the sidebar (ui/Sidebar.jsx, wired in
+// components/AppLayoutContainer.jsx) instead of the old plain text
+// links -- ProtectedRoute stays outside the layout shell so a logged-
+// out visitor gets redirected to /login without the header/sidebar
+// ever rendering.
 function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/search" element={<SearchRoute />} />
-      </Routes>
+      <ThemeProvider>
+        <AuthProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPageContainer />} />
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <AppLayoutContainer>
+                    <DashboardPage />
+                  </AppLayoutContainer>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/search"
+              element={
+                <ProtectedRoute>
+                  <AppLayoutContainer>
+                    <SearchRoute />
+                  </AppLayoutContainer>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </AuthProvider>
+      </ThemeProvider>
     </BrowserRouter>
   );
 }
