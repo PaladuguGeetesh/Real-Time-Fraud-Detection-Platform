@@ -1,0 +1,105 @@
+<svg width="1100" height="820" viewBox="0 0 1100 820" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', -apple-system, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1L9 5L1 9" fill="none" stroke="#475569" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arrowLight" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1 1L9 5L1 9" fill="none" stroke="#94a3b8" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect width="1100" height="820" fill="#f8fafc"/>
+
+  <text x="550" y="36" text-anchor="middle" font-size="21" font-weight="700" fill="#0f172a">Real-Time Fraud Detection Platform — System Architecture</text>
+  <text x="550" y="57" text-anchor="middle" font-size="12.5" fill="#64748b">Event-driven pipeline · Kafka backbone · four independent downstream consumers</text>
+
+  <rect x="425" y="80" width="250" height="58" rx="12" fill="#ffffff" stroke="#f59e0b" stroke-width="2"/>
+  <text x="550" y="102" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0f172a">Transaction Generator</text>
+  <text x="550" y="120" text-anchor="middle" font-size="10.5" fill="#64748b">Simulates a payment gateway (Python)</text>
+
+  <line x1="550" y1="138" x2="550" y2="164" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="164" width="1020" height="298" rx="16" fill="#eef2ff" stroke="#c7d2fe" stroke-width="1.5"/>
+  <text x="62" y="190" font-size="12.5" font-weight="700" fill="#4338ca" letter-spacing="0.5">KAFKA EVENT BACKBONE</text>
+
+  <rect x="400" y="204" width="300" height="56" rx="10" fill="#ffffff" stroke="#6366f1" stroke-width="2"/>
+  <text x="550" y="226" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">Kafka Topic: transactions</text>
+  <text x="550" y="243" text-anchor="middle" font-size="10" fill="#64748b">Raw events, durable log</text>
+
+  <line x1="550" y1="260" x2="550" y2="286" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="370" y="296" width="290" height="66" rx="10" fill="#ffffff" stroke="#7c3aed" stroke-width="2"/>
+  <text x="515" y="318" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">ML Scoring Consumer</text>
+  <text x="515" y="335" text-anchor="middle" font-size="10" fill="#64748b">Retries forever, capped backoff</text>
+  <text x="515" y="350" text-anchor="middle" font-size="10" fill="#64748b">on ML-service failure</text>
+
+  <line x1="660" y1="329" x2="738" y2="329" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowLight)"/>
+  <text x="699" y="320" text-anchor="middle" font-size="9" fill="#7c3aed">HTTP</text>
+
+  <rect x="740" y="296" width="270" height="66" rx="10" fill="#ffffff" stroke="#a78bfa" stroke-width="2"/>
+  <text x="875" y="318" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">ML Service</text>
+  <text x="875" y="335" text-anchor="middle" font-size="10" fill="#64748b">FastAPI · XGBoost</text>
+  <text x="875" y="350" text-anchor="middle" font-size="10" fill="#64748b">96% precision · 83% recall</text>
+
+  <line x1="515" y1="362" x2="515" y2="388" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="365" y="398" width="300" height="56" rx="10" fill="#ffffff" stroke="#6366f1" stroke-width="2"/>
+  <text x="515" y="420" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f172a">Kafka Topic: scored-transactions</text>
+  <text x="515" y="437" text-anchor="middle" font-size="10" fill="#64748b">Prediction attached, fans out</text>
+
+  <line x1="515" y1="454" x2="515" y2="486" stroke="#475569" stroke-width="1.5"/>
+  <line x1="180" y1="486" x2="920" y2="486" stroke="#475569" stroke-width="1.5"/>
+  <line x1="180" y1="486" x2="180" y2="518" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="410" y1="486" x2="410" y2="518" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="670" y1="486" x2="670" y2="518" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="920" y1="486" x2="920" y2="518" stroke="#475569" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="524" width="1020" height="112" rx="16" fill="#f0fdfa" stroke="#99f6e4" stroke-width="1.5"/>
+  <text x="62" y="548" font-size="12.5" font-weight="700" fill="#0f766e" letter-spacing="0.5">FOUR INDEPENDENT CONSUMERS — TIERED FAILURE HANDLING</text>
+
+  <rect x="80" y="560" width="200" height="60" rx="10" fill="#ffffff" stroke="#14b8a6" stroke-width="2"/>
+  <text x="180" y="583" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">MySQL Writer</text>
+  <text x="180" y="600" text-anchor="middle" font-size="9.5" fill="#64748b">Retry forever · no data loss</text>
+
+  <rect x="310" y="560" width="200" height="60" rx="10" fill="#ffffff" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="410" y="583" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">Redis Updater</text>
+  <text x="410" y="600" text-anchor="middle" font-size="9.5" fill="#64748b">Skip &amp; log · regenerable</text>
+
+  <rect x="540" y="560" width="260" height="60" rx="10" fill="#ffffff" stroke="#0ea5e9" stroke-width="2"/>
+  <text x="670" y="583" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">Dashboard Broadcaster</text>
+  <text x="670" y="600" text-anchor="middle" font-size="9.5" fill="#64748b">Skip &amp; log · pushes via SSE</text>
+
+  <rect x="820" y="560" width="200" height="60" rx="10" fill="#ffffff" stroke="#14b8a6" stroke-width="2"/>
+  <text x="920" y="583" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">Audit Log Writer</text>
+  <text x="920" y="600" text-anchor="middle" font-size="9.5" fill="#64748b">Fraud only · retry forever</text>
+
+  <line x1="920" y1="620" x2="920" y2="646" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrowLight)"/>
+  <rect x="850" y="654" width="140" height="40" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3,3"/>
+  <text x="920" y="678" text-anchor="middle" font-size="10.5" font-weight="700" fill="#64748b">Audit Log (storage only)</text>
+
+  <line x1="180" y1="620" x2="180" y2="670" stroke="#475569" stroke-width="1.4"/>
+  <line x1="410" y1="620" x2="410" y2="670" stroke="#475569" stroke-width="1.4"/>
+  <line x1="670" y1="620" x2="670" y2="670" stroke="#475569" stroke-width="1.4"/>
+  <line x1="180" y1="670" x2="670" y2="670" stroke="#475569" stroke-width="1.4"/>
+  <line x1="425" y1="670" x2="425" y2="700" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <rect x="255" y="710" width="340" height="80" rx="14" fill="#eff6ff" stroke="#3b82f6" stroke-width="2"/>
+  <text x="425" y="736" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">React Dashboard</text>
+  <text x="425" y="754" text-anchor="middle" font-size="10.5" fill="#1d4ed8">Live Feed (SSE) + Search (REST)</text>
+  <text x="425" y="771" text-anchor="middle" font-size="10.5" fill="#1d4ed8">Auth-protected (JWT + httpOnly cookie)</text>
+
+  <g font-size="10" fill="#475569">
+    <rect x="700" y="720" width="14" height="14" rx="3" fill="#ffffff" stroke="#f59e0b" stroke-width="2"/>
+    <text x="720" y="731">Ingestion</text>
+    <rect x="700" y="742" width="14" height="14" rx="3" fill="#ffffff" stroke="#6366f1" stroke-width="2"/>
+    <text x="720" y="753">Kafka topic</text>
+    <rect x="820" y="720" width="14" height="14" rx="3" fill="#ffffff" stroke="#7c3aed" stroke-width="2"/>
+    <text x="840" y="731">ML / scoring</text>
+    <rect x="820" y="742" width="14" height="14" rx="3" fill="#ffffff" stroke="#14b8a6" stroke-width="2"/>
+    <text x="840" y="753">Retry-forever consumer</text>
+    <rect x="960" y="720" width="14" height="14" rx="3" fill="#ffffff" stroke="#0ea5e9" stroke-width="2"/>
+    <text x="980" y="731">Skip &amp; log consumer</text>
+    <rect x="960" y="742" width="14" height="14" rx="3" fill="#ffffff" stroke="#3b82f6" stroke-width="2"/>
+    <text x="980" y="753">Presentation</text>
+  </g>
+</svg>
